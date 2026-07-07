@@ -54,6 +54,10 @@ type Config struct {
 	ErrorPages *errorPages.ErrorPagesConfig `json:"error_pages"`
 
 	RequestedResources []string `json:"requested_resources"`
+
+	// Additional query parameters to send to the IDP's authorization endpoint, eg. acr_values or prompt.
+	// A `prompt` query parameter on the incoming /login request still takes precedence over this.
+	AuthorizationParams map[string]string `json:"authorization_params"`
 }
 
 type ProviderConfig struct {
