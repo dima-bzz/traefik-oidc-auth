@@ -680,6 +680,10 @@ func (toa *TraefikOidcAuth) redirectToProvider(rw http.ResponseWriter, req *http
 			toa.logger.Log(logging.LevelWarn, "AuthorizationParams contains reserved key '%s' which will be ignored", key)
 			continue
 		}
+
+		if override := req.URL.Query().Get(key); override != "" {
+			value = override
+		}
 		urlValues.Set(key, value)
 	}
 
@@ -747,6 +751,15 @@ func (toa *TraefikOidcAuth) doubleRedirectToProvider(rw http.ResponseWriter, req
 
 	urlValues := url.Values{
 		"state": {stateBase64},
+	}
+
+	for key := range toa.Config.AuthorizationParams {
+		if reservedAuthorizationParams[key] {
+			continue
+		}
+		if override := req.URL.Query().Get(key); override != "" {
+			urlValues.Add(key, override)
+		}
 	}
 
 	if prompt := req.URL.Query().Get("prompt"); prompt != "" {
