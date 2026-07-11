@@ -964,6 +964,65 @@ http:
   expect(response.status()).toBe(200);
 });
 
+test("test UnauthorizedBehavior Challenge returns to the originally requested path", async ({ page }) => {
+   await configureTraefik(`
+http:
+  services:
+    whoami:
+      loadBalancer:
+        servers:
+          - url: http://whoami:80
+
+  middlewares:
+    auth:
+      plugin:
+        traefik-oidc-auth:
+          LogLevel: DEBUG
+          Provider:
+            Url: "\${PROVIDER_URL_HTTP}"
+            ClientId: "\${CLIENT_ID}"
+            ClientSecret: "\${CLIENT_SECRET}"
+            UsePkce: false
+          UnauthorizedBehavior: Challenge
+          AuthorizationParams:
+            prompt: login
+          Authorization:
+            AssertClaims:
+              - Name: email
+                AnyOf: ["alice@example.com"]
+            CheckOnEveryRequest: true
+
+  routers:
+    whoami:
+      entryPoints: ["web"]
+      rule: "HostRegexp(\`.+\`)"
+      service: whoami
+      middlewares: ["auth@file"]
+`);
+
+  // Unlike the sibling test which targets the site root, use a non-root path so we can assert the
+  // challenge round-trip returns the user to their *original* destination and not just any 200 page.
+  // The re-challenge is triggered from within the callback handler, whose request URI is the
+  // /oidc/callback URL - if that URI leaked into the redirect target, we'd loop back through the
+  // callback (with a spent code) instead of landing on /some/deep/path.
+  await expectGotoOkay(page, "http://localhost:9080/some/deep/path");
+
+  // Log in as bob first, who doesn't satisfy the alice-only claim requirement. prompt=login makes
+  // the challenge redirect show a "continue as bob" screen rather than silently reusing his session.
+  await page.locator("#username").fill("bob@example.com");
+  await page.locator("#password").fill("bob123");
+  await page.locator('#kc-login').click();
+
+  // Click "Restart login" to get a fresh form and switch accounts.
+  await page.locator("#reset-login").click();
+
+  // Switch to alice, who satisfies the claim requirement, and confirm we land back on the original path.
+  const response = await login(page, "alice@example.com", "alice123", "http://localhost:9080/some/deep/path");
+
+  expect(response.status()).toBe(200);
+  expect(new URL(response.url()).pathname).toBe("/some/deep/path");
+});
+
 //-----------------------------------------------------------------------------
 // Helper functions
 //-----------------------------------------------------------------------------
