@@ -22,9 +22,11 @@ type SessionState struct {
 	IsAuthorized   bool      `json:"is_authorized"`
 	TokenExpiresIn int       `json:"token_expires_in"`
 
-	// Set when this session was just (re-)established via a login that still didn't satisfy the
-	// Authorization rules. Used by UnauthorizedBehavior's Challenge to avoid redirecting to the IDP
-	// again for the same session, which would otherwise risk an infinite redirect loop.
+	// Set when this session was (re-)established via a redirect triggered by UnauthorizedBehavior's
+	// Challenge, regardless of whether the resulting session ends up authorized - the callback may be
+	// handled by a different, more permissive middleware instance than the one that failed the check.
+	// Used to avoid redirecting to the IDP again for the same session, which would otherwise risk an
+	// infinite redirect loop.
 	ChallengeAttempted bool `json:"challenge_attempted"`
 }
 

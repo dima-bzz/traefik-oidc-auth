@@ -8,6 +8,12 @@ import (
 type OidcState struct {
 	Action      string `json:"action"`
 	RedirectUrl string `json:"redirect_url"`
+
+	// Set when this login was triggered by UnauthorizedBehavior's Challenge (an authorization
+	// re-check that failed), as opposed to a plain unauthenticated login. Carried through the
+	// callback so the resulting session can be marked as having already attempted a challenge,
+	// regardless of which middleware instance's rules end up handling the callback.
+	IsChallenge bool `json:"is_challenge"`
 }
 
 func EncodeState(state *OidcState) (string, error) {
