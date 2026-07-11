@@ -630,6 +630,16 @@ func (toa *TraefikOidcAuth) needsDoubleRedirect(req *http.Request) bool {
 	return false
 }
 
+// Protocol-critical parameters that AuthorizationParams must not be allowed to override.
+var reservedAuthorizationParams = map[string]bool{
+	"response_type": true,
+	"client_id":     true,
+	"redirect_uri":  true,
+	"state":         true,
+	"scope":         true,
+	"resource":      true,
+}
+
 func (toa *TraefikOidcAuth) redirectToProvider(rw http.ResponseWriter, req *http.Request, redirectUrl string) {
 	toa.logger.Log(logging.LevelInfo, "Redirecting to OIDC provider...")
 
@@ -665,8 +675,20 @@ func (toa *TraefikOidcAuth) redirectToProvider(rw http.ResponseWriter, req *http
 		"resource":      toa.Config.RequestedResources,
 	}
 
+	for key, value := range toa.Config.AuthorizationParams {
+		if reservedAuthorizationParams[key] {
+			toa.logger.Log(logging.LevelWarn, "AuthorizationParams contains reserved key '%s' which will be ignored", key)
+			continue
+		}
+
+		if override := req.URL.Query().Get(key); override != "" {
+			value = override
+		}
+		urlValues.Set(key, value)
+	}
+
 	if prompt := req.URL.Query().Get("prompt"); prompt != "" {
-		urlValues.Add("prompt", prompt)
+		urlValues.Set("prompt", prompt)
 	}
 
 	if toa.Config.Provider.UsePkceBool {
@@ -729,6 +751,15 @@ func (toa *TraefikOidcAuth) doubleRedirectToProvider(rw http.ResponseWriter, req
 
 	urlValues := url.Values{
 		"state": {stateBase64},
+	}
+
+	for key := range toa.Config.AuthorizationParams {
+		if reservedAuthorizationParams[key] {
+			continue
+		}
+		if override := req.URL.Query().Get(key); override != "" {
+			urlValues.Add(key, override)
+		}
 	}
 
 	if prompt := req.URL.Query().Get("prompt"); prompt != "" {
