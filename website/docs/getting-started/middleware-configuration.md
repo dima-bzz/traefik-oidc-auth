@@ -60,6 +60,14 @@ Provider:
 | `RequestedResources` | no | `string[]`| *none* | An array of resource URIs according to [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) for which the token should be requested. | 
 | `AuthorizationParams` | no | `map[string]string`| *none* | Additional query parameters to send to the IDP's authorization endpoint, eg. `acr_values` to request a specific authentication context (step-up authentication) or a default `prompt`. Reserved protocol parameters (`response_type`, `client_id`, `redirect_uri`, `state`, `scope`, `resource`) cannot be overridden this way and are ignored with a warning. A `prompt` query parameter on the incoming `/login` request still takes precedence over the configured value. |
 
+:::warning Upgrading from a single `UnauthorizedBehavior`
+If you're using a version where a single `UnauthorizedBehavior` option controlled the response for both unauthenticated requests (no/invalid session, HTTP 401) and unauthorized requests (valid session, but failing the `Authorization` rules, HTTP 403), note that this has been split into two separate options:
+
+- `UnauthenticatedBehavior` now controls the 401 case.
+- `UnauthorizedBehavior` now controls only the 403 case.
+
+If your old `UnauthorizedBehavior` was set to `Auto` (the default), no action is required. Otherwise, rename your existing `UnauthorizedBehavior` setting to `UnauthenticatedBehavior` to keep the exact same behavior as before. Then decide separately whether the new `UnauthorizedBehavior` should use the same value or a different one for the 403 case (for example, `Challenge` to enable step-up authentication, see [`AuthorizationParams`](#plugin-config-block) and [Authorization](./authorization.md)).
+:::
 
 ## Provider Block {#provider}
 
