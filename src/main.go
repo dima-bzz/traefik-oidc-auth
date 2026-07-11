@@ -132,7 +132,7 @@ func (toa *TraefikOidcAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 	}
 
 	if toa.Config.LoginUri != "" && strings.HasPrefix(req.RequestURI, toa.Config.LoginUri) {
-		toa.handleLogin(rw, req, false)
+		toa.handleLogin(rw, req, false, "")
 		return
 	}
 
@@ -153,7 +153,7 @@ func (toa *TraefikOidcAuth) ServeHTTP(rw http.ResponseWriter, req *http.Request)
 		}
 
 		if !session.IsAuthorized && toa.Config.UnauthorizedBehavior != "Forward" {
-			toa.handleUnauthorized(rw, req, session)
+			toa.handleUnauthorized(rw, req, session, "")
 			return
 		}
 
@@ -447,7 +447,10 @@ func (toa *TraefikOidcAuth) handleCallback(rw http.ResponseWriter, req *http.Req
 		}
 
 		if !isAuthorized {
-			toa.handleUnauthorized(rw, req, session)
+			// req here is the callback URL, which is not a usable post-login target. Pass the original
+			// destination (already resolved above from the OIDC state) so a Challenge re-login returns
+			// the user to the right page instead of looping back through the callback.
+			toa.handleUnauthorized(rw, req, session, redirectUrl)
 			return
 		}
 
@@ -525,7 +528,7 @@ func (toa *TraefikOidcAuth) handleUnauthenticated(rw http.ResponseWriter, req *h
 	switch toa.Config.UnauthenticatedBehavior {
 	case "Challenge":
 		// Handle login
-		toa.handleLogin(rw, req, false)
+		toa.handleLogin(rw, req, false, "")
 	case "Unauthorized":
 		// Respond with 401 Unauthorized
 		toa.writeUnauthenticatedError(rw, req)
@@ -536,7 +539,7 @@ func (toa *TraefikOidcAuth) handleUnauthenticated(rw http.ResponseWriter, req *h
 	case "Auto":
 		if utils.IsHtmlRequest(req) {
 			// Handle login for HTML requests
-			toa.handleLogin(rw, req, false)
+			toa.handleLogin(rw, req, false, "")
 		} else {
 			// Respond with 401 Unauthorized for non-HTML requests
 			toa.writeUnauthenticatedError(rw, req)
@@ -563,12 +566,16 @@ func (toa *TraefikOidcAuth) writeUnauthenticatedError(rw http.ResponseWriter, re
 	errorPages.WriteError(toa.logger, toa.Config.ErrorPages.Unauthenticated, rw, req, data)
 }
 
-func (toa *TraefikOidcAuth) handleUnauthorized(rw http.ResponseWriter, req *http.Request, session *session.SessionState) {
+// handleUnauthorized handles a valid session that fails the Authorization rules. redirectUrlOverride
+// is passed through to the Challenge redirect: empty when called on a real user request (the target is
+// derived from req), or the known original destination when called from handleCallback (where req is
+// the callback URL).
+func (toa *TraefikOidcAuth) handleUnauthorized(rw http.ResponseWriter, req *http.Request, session *session.SessionState, redirectUrlOverride string) {
 	switch toa.Config.UnauthorizedBehavior {
 	case "Challenge":
 		if !session.ChallengeAttempted && utils.IsHtmlRequest(req) {
 			// Handle login for HTML requests
-			toa.handleLogin(rw, req, true)
+			toa.handleLogin(rw, req, true, redirectUrlOverride)
 		} else {
 			// Already redirected through the IDP for this session and it didn't help (across any
 			// middleware instance sharing this session, not just the immediate callback), or a
@@ -613,29 +620,37 @@ func (toa *TraefikOidcAuth) writeUnauthorizedError(rw http.ResponseWriter, req *
 	errorPages.WriteError(toa.logger, toa.Config.ErrorPages.Unauthorized, rw, req, data)
 }
 
-func (toa *TraefikOidcAuth) handleLogin(rw http.ResponseWriter, req *http.Request, isChallenge bool) {
+// handleLogin starts the OIDC login flow. If redirectUrlOverride is non-empty, the user will be sent
+// there after login instead of a target derived from the request. This is used when re-challenging
+// from within handleCallback, where req is the callback URL (not a usable post-login target) but the
+// original destination is already known from the OIDC state.
+func (toa *TraefikOidcAuth) handleLogin(rw http.ResponseWriter, req *http.Request, isChallenge bool, redirectUrlOverride string) {
 	toa.logger.Log(logging.LevelInfo, "Logging in...")
 	var redirectUrl string
 
-	// If the user specified one on the /login request, use this one
-	redirectUriFromQuery, err := utils.ValidateRedirectUri(req.URL.Query().Get("redirect_uri"), toa.Config.ValidPostLoginRedirectUris)
-	if err != nil {
-		toa.logger.Log(logging.LevelError, "%s", err.Error())
-		http.Error(rw, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	if toa.Config.LoginUri != "" && strings.HasPrefix(req.RequestURI, toa.Config.LoginUri) && redirectUriFromQuery != "" {
-		redirectUrl = redirectUriFromQuery
-	} else if toa.Config.PostLoginRedirectUri != "" {
-		redirectUrl = utils.EnsureAbsoluteUrl(req, toa.Config.PostLoginRedirectUri)
+	if redirectUrlOverride != "" {
+		redirectUrl = redirectUrlOverride
 	} else {
-		host := utils.GetFullHost(req)
-		redirectUrl = fmt.Sprintf("%s%s", host, req.RequestURI)
+		// If the user specified one on the /login request, use this one
+		redirectUriFromQuery, err := utils.ValidateRedirectUri(req.URL.Query().Get("redirect_uri"), toa.Config.ValidPostLoginRedirectUris)
+		if err != nil {
+			toa.logger.Log(logging.LevelError, "%s", err.Error())
+			http.Error(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
 
-		// Special case: If someone just calls /login but doesn't provide a redirect_uri, we go to / instead of /login again.
-		if toa.Config.LoginUri != "" && strings.HasPrefix(req.RequestURI, toa.Config.LoginUri) {
-			redirectUrl = host
+		if toa.Config.LoginUri != "" && strings.HasPrefix(req.RequestURI, toa.Config.LoginUri) && redirectUriFromQuery != "" {
+			redirectUrl = redirectUriFromQuery
+		} else if toa.Config.PostLoginRedirectUri != "" {
+			redirectUrl = utils.EnsureAbsoluteUrl(req, toa.Config.PostLoginRedirectUri)
+		} else {
+			host := utils.GetFullHost(req)
+			redirectUrl = fmt.Sprintf("%s%s", host, req.RequestURI)
+
+			// Special case: If someone just calls /login but doesn't provide a redirect_uri, we go to / instead of /login again.
+			if toa.Config.LoginUri != "" && strings.HasPrefix(req.RequestURI, toa.Config.LoginUri) {
+				redirectUrl = host
+			}
 		}
 	}
 

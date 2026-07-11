@@ -907,6 +907,63 @@ http:
 
 });
 
+test("test UnauthorizedBehavior Challenge succeeds after switching accounts", async ({ page }) => {
+   await configureTraefik(`
+http:
+  services:
+    whoami:
+      loadBalancer:
+        servers:
+          - url: http://whoami:80
+
+  middlewares:
+    auth:
+      plugin:
+        traefik-oidc-auth:
+          LogLevel: DEBUG
+          Provider:
+            Url: "\${PROVIDER_URL_HTTP}"
+            ClientId: "\${CLIENT_ID}"
+            ClientSecret: "\${CLIENT_SECRET}"
+            UsePkce: false
+          UnauthorizedBehavior: Challenge
+          AuthorizationParams:
+            prompt: login
+          Authorization:
+            AssertClaims:
+              - Name: email
+                AnyOf: ["alice@example.com"]
+            CheckOnEveryRequest: true
+
+  routers:
+    whoami:
+      entryPoints: ["web"]
+      rule: "HostRegexp(\`.+\`)"
+      service: whoami
+      middlewares: ["auth@file"]
+`);
+
+  await expectGotoOkay(page, "http://localhost:9080/");
+
+  // Log in as bob first, who doesn't satisfy the alice-only claim requirement. AuthorizationParams
+  // forces prompt=login on every authorization request, so the challenge redirect doesn't silently
+  // reuse bob's SSO session.
+  await page.locator("#username").fill("bob@example.com");
+  await page.locator("#password").fill("bob123");
+  await page.locator('#kc-login').click();
+
+  // Because bob still has an active Keycloak SSO session, prompt=login shows a "continue as bob"
+  // confirmation screen (with a read-only kc-attempted-username field) rather than a blank form.
+  // Click "Restart login" to get a full form and switch accounts.
+  await page.locator("#reset-login").click();
+
+  // Now on a fresh login form - switch to alice, who does satisfy the claim requirement. This
+  // should land back on the originally requested page, authorized.
+  const response = await login(page, "alice@example.com", "alice123", "http://localhost:9080/");
+
+  expect(response.status()).toBe(200);
+});
+
 //-----------------------------------------------------------------------------
 // Helper functions
 //-----------------------------------------------------------------------------
