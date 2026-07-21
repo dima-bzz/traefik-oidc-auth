@@ -6,6 +6,15 @@ sidebar_position: 3
 
 ## Plugin Config Block
 
+:::warning Upgrading from a single `UnauthorizedBehavior`
+Starting with version `0.21.0`, the single `UnauthorizedBehavior` option that previously controlled the response for both unauthenticated requests (no/invalid session, HTTP 401) and unauthorized requests (valid session, but failing the `Authorization` rules, HTTP 403) has been split into two separate options:
+
+- `UnauthenticatedBehavior` now controls the 401 case.
+- `UnauthorizedBehavior` now controls only the 403 case.
+
+If you're upgrading from a version prior to `0.21.0`, move your existing `UnauthorizedBehavior` value as-is to `UnauthenticatedBehavior` to keep the exact same behavior as before. No change is needed for the 403 case unless you want to opt into the new `Challenge` behavior there (e.g. to enable step-up authentication, see [`AuthorizationParams`](#plugin-config-block) and [Authorization](./authorization.md)).
+:::
+
 :::caution
 It is highly recommended to change the default encryption-secret by providing your own 32-character secret using the `Secret`-option.
 You can generate a random one here: https://it-tools.tech/token-generator?length=32
@@ -41,7 +50,7 @@ Provider:
 | `Provider` | yes | [`Provider`](#provider) | *none* | Identity Provider Configuration. See *Provider* block. |
 | `Scopes` | no | `string[]` | `["openid", "profile", "email"]` | A list of scopes to request from the IDP. |
 | `CallbackUri`* | no | `string` | `/oidc/callback` | Defines the callback url used by the IDP. This needs to be registered in your IDP. This may be either a relative URL or an absolute URL -- see also [Callback URLs](./callback-uri.md) |
-| `LoginUri`* | no | `string` | *none* | An optional url, which should trigger the login-flow. The response of every other url is defined by the `UnauthorizedBehavior`-configuration.  |
+| `LoginUri`* | no | `string` | *none* | An optional url, which should trigger the login-flow. The response of every other url is defined by the `UnauthenticatedBehavior`/`UnauthorizedBehavior`-configuration.  |
 | `PostLoginRedirectUri`* | no | `string` | *none* | An optional static redirect url where the user should be redirected after login. By default the user will be redirected to the url which triggered the login-flow. |
 | `ValidPostLoginRedirectUris` | no | `string[]` | *none* | A list of valid redirect uris when provided by the *redirect_uri* query parameter on the login-endpoint. The uri has to match exactly. Optionally you can use a `*` to match any character of `a-z, A-Z, 0-9, -, _`. You can also specify a single `*` which is a full wildcard but this is not recommended. |
 | `LogoutUri`* | no | `string` | `/logout` | The url which should trigger the logout-flow. See [here](./how-it-works.md#logout) for more details. |
@@ -51,14 +60,14 @@ Provider:
 | `SessionCookie` | no | [`SessionCookie`](#session-cookie) | *none* | SessionCookie Configuration. See *SessionCookieConfig* block. |
 | `AuthorizationHeader` | no | [`AuthorizationHeader`](#authorization-header) | *none* | AuthorizationHeader Configuration. See *AuthorizationHeader* block. |
 | `AuthorizationCookie` | no | [`AuthorizationCookie`](#authorization-cookie) | *none* | AuthorizationCookie Configuration. See *AuthorizationCookie* block. |
-| `UnauthorizedBehavior`* | no | `string` | `Auto` | Defines the behavior for unauthenticated requests. `Challenge` means the user will be redirected to the IDP's login page, `Unauthorized` will return a 401 status response, `Forward` will send the request as unauthenticated to the upstream service, and `Auto` will automatically choose based on request type (HTML requests get redirected, AJAX requests get 401). |
+| `UnauthenticatedBehavior`* | no | `string` | `Auto` | Defines the behavior for unauthenticated requests, i.e. requests without a valid session. `Challenge` means the user will be redirected to the IDP's login page, `Unauthorized` will return a 401 status response, `Forward` will send the request as unauthenticated to the upstream service, and `Auto` will automatically choose based on request type (HTML requests get redirected, AJAX requests get 401). |
+| `UnauthorizedBehavior`* | no | `string` | `Unauthorized` | Defines the behavior for unauthorized requests, i.e. requests with a valid session that don't pass the `Authorization` rules. `Unauthorized` (the default) returns a 403 status response, and `Forward` will send the request as unauthorized to the upstream service. `Challenge` means HTML requests will be redirected to the IDP's login page once per session to try and satisfy the authorization requirements (e.g. step-up authentication); non-HTML requests, or a request whose session already went through this redirect and is still not authorized, get a 403 response instead. This is opt-in only, since silently re-authenticating via an existing IDP SSO session usually can't change the outcome of a failed claim check, which the once-per-session limit guards against turning into a redirect loop. |
 | `Authorization` | no | [`Authorization`](#authorization) | *none* | Authorization Configuration. See *Authorization* block. |
 | `Headers` | no | [`Header`](#header) | *none* | Supplies a list of headers which will be attached to the upstream request. See *Header* block. |
 | `BypassAuthenticationRule`* | no | `string` | *none* | Specifies an optional rule to bypass authentication. See [Bypass Authentication Rule](./bypass-authentication-rule.md) for more details. |
 | `ErrorPages` | no | [`ErrorPages`](#error-pages) | *none* | Allows you to customize some error pages. See *ErrorPages* block. |
 | `RequestedResources` | no | `string[]`| *none* | An array of resource URIs according to [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) for which the token should be requested. | 
 | `AuthorizationParams` | no | `map[string]string`| *none* | Additional query parameters to send to the IDP's authorization endpoint, eg. `acr_values` to request a specific authentication context (step-up authentication) or a default `prompt`. Reserved protocol parameters (`response_type`, `client_id`, `redirect_uri`, `state`, `scope`, `resource`) cannot be overridden this way and are ignored with a warning. A `prompt` query parameter on the incoming `/login` request still takes precedence over the configured value. |
-
 
 ## Provider Block {#provider}
 
@@ -104,7 +113,7 @@ When `CheckOnEveryRequest` is enabled, this will greatly increase the hit rate o
 ## AuthorizationHeader Block {#authorization-header}
 
 By specifying this configuration, a request can send an externally generated access token via this header to authenticate the request.
-In this case no session will be created by the middleware. You may also want to set `UnauthorizedBehavior` to `Unauthorized`.
+In this case no session will be created by the middleware. Since these requests are usually made by non-browser clients, you may also want to set `UnauthenticatedBehavior` and `UnauthorizedBehavior` to `Unauthorized`, so a missing/invalid token results in a plain 401/403 response instead of a redirect to the IDP's login page.
 
 | Name | Required | Type | Default | Description |
 |---|---|---|---|---|
@@ -123,7 +132,7 @@ This works exactly the same as [AuthorizationHeader](#authorization-header), but
 | Name | Required | Type | Default | Description |
 |---|---|---|---|---|
 | `AssertClaims` | no | [`ClaimAssertion[]`](#claim-assertion) | *none* | ClaimAssertion Configuration. See *ClaimAssertion* block. |
-| `CheckOnEveryRequest` | no | `bool` | `false` |  When set to true, authorization is checked on every single request. When set to false, authorization is only checked when the user logs in and the session is being created. When using external authentication using ˋAuthorizationHeaderˋ or ˋAuthorizationCookieˋ this is always treated as true.
+| `CheckOnEveryRequest` | no | `bool` | `false` |  When set to true, authorization is checked on every single request. When set to false, authorization is only checked when the user logs in and the session is being created, and the result is cached for the lifetime of the session. When using external authentication using ˋAuthorizationHeaderˋ or ˋAuthorizationCookieˋ this is always treated as true. See [When is authorization checked?](./authorization.md#when-is-authorization-checked) for details, including what happens if the initial check fails.
 
 
 ## ClaimAssertion Block {#claim-assertion}
