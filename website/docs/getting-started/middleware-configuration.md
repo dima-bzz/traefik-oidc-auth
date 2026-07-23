@@ -52,10 +52,10 @@ Provider:
 | `CallbackUri`* | no | `string` | `/oidc/callback` | Defines the callback url used by the IDP. This needs to be registered in your IDP. This may be either a relative URL or an absolute URL -- see also [Callback URLs](./callback-uri.md) |
 | `LoginUri`* | no | `string` | *none* | An optional url, which should trigger the login-flow. The response of every other url is defined by the `UnauthenticatedBehavior`/`UnauthorizedBehavior`-configuration.  |
 | `PostLoginRedirectUri`* | no | `string` | *none* | An optional static redirect url where the user should be redirected after login. By default the user will be redirected to the url which triggered the login-flow. |
-| `ValidPostLoginRedirectUris` | no | `string[]` | *none* | A list of valid redirect uris when provided by the *redirect_uri* query parameter on the login-endpoint. The uri has to match exactly. Optionally you can use a `*` to match any character of `a-z, A-Z, 0-9, -, _`. You can also specify a single `*` which is a full wildcard but this is not recommended. |
+| `ValidPostLoginRedirectUris` | no | `string[]` | *none* | A list of valid redirect uris when provided by the *redirect_uri* query parameter on the login-endpoint. The uri has to match exactly, unless you use wildcards -- see [Redirect Uri Wildcards](#redirect-uri-wildcards) below. You can also specify a single `*` which is a full wildcard but this is not recommended. |
 | `LogoutUri`* | no | `string` | `/logout` | The url which should trigger the logout-flow. See [here](./how-it-works.md#logout) for more details. |
 | `PostLogoutRedirectUri`* | no | `string` | `/` | The url where the user should be redirected after logout. |
-| `ValidPostLogoutRedirectUris` | no | `string[]` | *none* | A list of valid redirect uris when provided by the *redirect_uri* query parameter on the logout-endpoint. The uri has to match exactly. Optionally you can use a `*` to match any character of `a-z, A-Z, 0-9, -, _`. You can also specify a single `*` which is a full wildcard but this is not recommended. |
+| `ValidPostLogoutRedirectUris` | no | `string[]` | *none* | A list of valid redirect uris when provided by the *redirect_uri* query parameter on the logout-endpoint. The uri has to match exactly, unless you use wildcards -- see [Redirect Uri Wildcards](#redirect-uri-wildcards) below. You can also specify a single `*` which is a full wildcard but this is not recommended. |
 | `CookieNamePrefix`* | no | `string` | `TraefikOidcAuth` | Specifies the prefix for all cookies used internally by the plugin. The final names are concatenated using dot-notation. Eg. `TraefikOidcAuth.Session`, `TraefikOidcAuth.CodeVerifier` etc. Please note that this prefix does not apply to *AuthorizationCookie* where the name can be set individually. |
 | `SessionCookie` | no | [`SessionCookie`](#session-cookie) | *none* | SessionCookie Configuration. See *SessionCookieConfig* block. |
 | `AuthorizationHeader` | no | [`AuthorizationHeader`](#authorization-header) | *none* | AuthorizationHeader Configuration. See *AuthorizationHeader* block. |
@@ -68,6 +68,17 @@ Provider:
 | `ErrorPages` | no | [`ErrorPages`](#error-pages) | *none* | Allows you to customize some error pages. See *ErrorPages* block. |
 | `RequestedResources` | no | `string[]`| *none* | An array of resource URIs according to [RFC 8707](https://www.rfc-editor.org/rfc/rfc8707) for which the token should be requested. | 
 | `AuthorizationParams` | no | `map[string]string`| *none* | Additional query parameters to send to the IDP's authorization endpoint, eg. `acr_values` to request a specific authentication context (step-up authentication) or a default `prompt`. Reserved protocol parameters (`response_type`, `client_id`, `redirect_uri`, `state`, `scope`, `resource`) cannot be overridden this way and are ignored with a warning. A `prompt` query parameter on the incoming `/login` request still takes precedence over the configured value. |
+
+### Redirect Uri Wildcards {#redirect-uri-wildcards}
+
+Entries in `ValidPostLoginRedirectUris` and `ValidPostLogoutRedirectUris` can be either a full url (eg. `https://example.com/app`) or just a path (eg. `/app`), and each can contain wildcards:
+
+- In the **host** part, `*` matches exactly one subdomain label and never crosses a `.` on its own. Eg. `https://*.example.com` matches `https://app.example.com`, but not `https://app.sub.example.com`.
+- In the **path** part, `*` matches any run of characters except `/` -- so it does match filenames with a dot in them (eg. `index.html`) or a query string glued to that segment, but not an additional path segment. Eg. `/good/*` matches `/good/index.html` and `/good/something?a=1`, but not `/good/something/else`.
+- Also in the path part, `**` matches any run of characters *including* `/`, ie. it can span multiple path segments. Eg. `/good/**` matches `/good/something/else`.
+- A single `*` on its own is a full wildcard matching anything, but this is not recommended since it effectively disables redirect uri validation.
+
+A path-only entry (without a scheme/host) only matches a path-only *redirect_uri*/*post_logout_redirect_uri* value, and a full-url entry only matches a full-url value -- they're never mixed.
 
 ## Provider Block {#provider}
 

@@ -269,19 +269,88 @@ func matchUriTemplate(value string, template string) bool {
 		return true
 	}
 
-	// Match wildcards
-	escapedTemplate := regexp.QuoteMeta(template)
-	escapedTemplate = strings.ReplaceAll(escapedTemplate, "\\*", "[a-zA-Z0-9-_]+")
-	escapedTemplate = fmt.Sprintf("^%s$", escapedTemplate)
+	tScheme, tAuthority, tPath, tHasAuthority := splitSchemeAuthorityPath(template)
+	vScheme, vAuthority, vPath, vHasAuthority := splitSchemeAuthorityPath(value)
 
-	regex, err := regexp.Compile(escapedTemplate)
+	// A template with a scheme/host (eg. "https://*.example.com/*") must not match a bare
+	// path, and vice versa.
+	if tHasAuthority != vHasAuthority {
+		return false
+	}
+
+	if tHasAuthority {
+		if tScheme != vScheme {
+			return false
+		}
+
+		// The host is matched label by label: "*" stands in for exactly one subdomain label
+		// and never crosses a "." on its own (eg. "*.example.com" doesn't match "a.b.example.com").
+		if !matchWithWildcard(vAuthority, tAuthority, "[a-zA-Z0-9-_]+") {
+			return false
+		}
+	}
+
+	// The path is matched with "*" standing for any run of characters within a single path
+	// segment (everything except "/", so eg. "index.html" is matched), and "**" standing for
+	// any run of characters across multiple segments (including "/").
+	return matchPathTemplate(vPath, tPath)
+}
+
+func splitSchemeAuthorityPath(value string) (scheme string, authority string, path string, hasAuthority bool) {
+	schemeSeparatorIndex := strings.Index(value, "://")
+	if schemeSeparatorIndex == -1 {
+		return "", "", value, false
+	}
+
+	scheme = value[:schemeSeparatorIndex]
+	rest := value[schemeSeparatorIndex+3:]
+
+	if pathIndex := strings.Index(rest, "/"); pathIndex != -1 {
+		authority = rest[:pathIndex]
+		path = rest[pathIndex:]
+	} else {
+		authority = rest
+		path = ""
+	}
+
+	return scheme, authority, path, true
+}
+
+func matchPathTemplate(value string, template string) bool {
+	if value == template {
+		return true
+	}
+
+	// Placeholder used while building the regex, so that "**" can be expanded into something
+	// different than a lone "*" further down.
+	const doubleWildcardPlaceholder = "\x00"
+
+	escapedTemplate := regexp.QuoteMeta(template)
+	escapedTemplate = strings.ReplaceAll(escapedTemplate, "\\*\\*", doubleWildcardPlaceholder)
+	escapedTemplate = strings.ReplaceAll(escapedTemplate, "\\*", "[^/]+")
+	escapedTemplate = strings.ReplaceAll(escapedTemplate, doubleWildcardPlaceholder, ".*")
+
+	return matchRegex(value, escapedTemplate)
+}
+
+func matchWithWildcard(value string, template string, wildcardCharClass string) bool {
+	if value == template {
+		return true
+	}
+
+	escapedTemplate := regexp.QuoteMeta(template)
+	escapedTemplate = strings.ReplaceAll(escapedTemplate, "\\*", wildcardCharClass)
+
+	return matchRegex(value, escapedTemplate)
+}
+
+func matchRegex(value string, pattern string) bool {
+	regex, err := regexp.Compile(fmt.Sprintf("^%s$", pattern))
 	if err != nil {
 		return false
 	}
 
-	result := regex.MatchString(value)
-
-	return result
+	return regex.MatchString(value)
 }
 
 func ParseAcceptType(raw string) AcceptType {
