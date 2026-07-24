@@ -124,53 +124,91 @@ func TestValidateRedirectUriWildcards(t *testing.T) {
 	expectRedirectUriMatch(t, "https://app.something.com/login", validUris, false)
 	expectRedirectUriMatch(t, "https://app.something.com/good", validUris, true)
 	expectRedirectUriMatch(t, "https://app.something.com/good/something", validUris, true)
-	expectRedirectUriMatch(t, "https://app.something.com/good/something/bad", validUris, false)
 
-	// A single "*" matches a filename with a dot in it, since it only excludes "/".
+	// A trailing "*" matches everything below the prefix, no matter how many segments
+	// it spans or whether the last one contains a dot.
+	expectRedirectUriMatch(t, "https://app.something.com/good/something/bad", validUris, true)
+	expectRedirectUriMatch(t, "https://app.something.com/index.html", validUris, false)
 	expectRedirectUriMatch(t, "https://app.something.com/good/index.html", validUris, true)
 
-	// A query string is part of the last path segment, so "*" (which excludes only "/")
-	// covers it too, as long as there is a matching segment for it to attach to.
+	// The query string is not part of the comparison once a wildcard is in play.
 	expectRedirectUriMatch(t, "https://app.something.com/good/something?a=1", validUris, true)
 
-	// But a query string appended directly to a non-wildcard segment ("/good") doesn't
-	// match, since "https://*.something.com/good" has no wildcard and "?a=1" makes the
-	// path different, and it doesn't match "/good/*" either, since there is no "/" before
-	// the query string for the wildcard segment to start after.
-	expectRedirectUriMatch(t, "https://app.something.com/good?a=1", validUris, false)
+	// A path that walks up the tree never matches a wildcard, in any encoding.
+	expectRedirectUriMatch(t, "https://app.something.com/good/../../etc/passwd", validUris, false)
+	expectRedirectUriMatch(t, "https://app.something.com/good/%2e%2e%2f%2e%2e/etc", validUris, false)
+
+	// Neither does a uri hiding the real host behind user-info.
+	expectRedirectUriMatch(t, "https://app.something.com@malicious.com/good/x", validUris, false)
+}
+
+func TestValidateRedirectUriRejectsGluedHostWildcard(t *testing.T) {
+	// A "*" glued directly onto the host with nothing after it (a likely missing "/" before
+	// an intended path wildcard) must never be treated as a host-label wildcard.
+	validUris := []string{"https://good.example.com*"}
+
+	expectRedirectUriMatch(t, "https://good.example.com/anything", validUris, false)
+	expectRedirectUriMatch(t, "https://good.example.comEVIL", validUris, false)
+	expectRedirectUriMatch(t, "https://good.example.com*", validUris, true)
+
+	// A lone "*" as the whole host is still a legitimate, unambiguous single-label wildcard.
+	expectRedirectUriMatch(t, "https://localhost", []string{"https://*"}, true)
+	expectRedirectUriMatch(t, "https://app.example.com", []string{"https://*"}, false)
+
+	// A "*" right after ":" is unambiguously a port wildcard, not a missing "/" -- a path
+	// separator wouldn't make sense there, so it's still honored. The template has no path
+	// of its own, so it only matches a value with no path either -- a value with a path
+	// needs "https://good.example.com:*/*" instead.
+	expectRedirectUriMatch(t, "https://good.example.com:8443", []string{"https://good.example.com:*"}, true)
+	expectRedirectUriMatch(t, "https://good.example.com:8443/app", []string{"https://good.example.com:*"}, false)
 }
 
 func TestValidateRedirectUriPathOnlyWildcards(t *testing.T) {
 	validUris := []string{
-		"/good/*",
+		"/app/*",
 	}
 
-	expectRedirectUriMatch(t, "/good/index.html", validUris, true)
-	expectRedirectUriMatch(t, "/good/something", validUris, true)
-	expectRedirectUriMatch(t, "/good/something/bad", validUris, false)
-	expectRedirectUriMatch(t, "/bad/index.html", validUris, false)
+	expectRedirectUriMatch(t, "/app/index.html", validUris, true)
+	expectRedirectUriMatch(t, "/app/something", validUris, true)
+	expectRedirectUriMatch(t, "/app/sub/index.html", validUris, true)
 
 	// A URL-encoded space ("%20") is just a run of literal "%", "2", "0" characters as far
 	// as the matcher is concerned - no decoding happens, but it still matches "*" since none
 	// of them is a "/".
-	expectRedirectUriMatch(t, "/good/index%20with%20space.html", validUris, true)
+	expectRedirectUriMatch(t, "/app/index%20with%20space.html", validUris, true)
 
-	// A query string appended directly to "/good" (no extra "/") doesn't match "/good/*",
-	// since there is no segment-separating "/" for the wildcard to start after.
-	expectRedirectUriMatch(t, "/good?a=1", validUris, false)
+	// The prefix itself is matched as well, so "/app/*" matches "/app".
+	expectRedirectUriMatch(t, "/app", validUris, true)
+
+	// An SPA using hash routing right at the prefix boundary still matches "/app/*", and the
+	// hash route plus any query string on it are carried through into the accepted value
+	// unchanged, even though they're ignored for the purpose of matching.
+	expectRedirectUriMatch(t, "/app/#/dashboard?tab=settings", validUris, true)
+
+	expectRedirectUriMatch(t, "/other/index.html", validUris, false)
+	expectRedirectUriMatch(t, "/app/../secret", validUris, false)
+
+	// A path-only template never matches an absolute url and vice versa.
+	expectRedirectUriMatch(t, "https://malicious.com/app/index.html", validUris, false)
+
+	// A protocol-relative "//host/path" reference resolves to a foreign host in a browser,
+	// even though it has no "://" and so looks like a bare path to splitSchemeAuthorityPath.
+	expectRedirectUriMatch(t, "//malicious.com/app/index.html", validUris, false)
 }
 
-func TestValidateRedirectUriDoubleWildcard(t *testing.T) {
-	validUris := []string{
-		"https://*.something.com/good/**",
+func TestValidateRedirectUriKeepsFragment(t *testing.T) {
+	// The fragment is only ignored for the purpose of matching against a wildcard (eg. an
+	// SPA using hash routing shouldn't need a dedicated entry per route) -- it's otherwise
+	// carried through unchanged into the accepted value, same as the query string already is.
+	matchedUri, err := ValidateRedirectUri("https://example.com/app#/page", []string{"*"})
+
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	expectRedirectUriMatch(t, "https://app.something.com/good/index.html", validUris, true)
-	expectRedirectUriMatch(t, "https://app.something.com/good/something/bad", validUris, true)
-	expectRedirectUriMatch(t, "https://app.something.com/bad/index.html", validUris, false)
-
-	// "**" crosses "/", so it also covers a query string attached after further segments.
-	expectRedirectUriMatch(t, "https://app.something.com/good/a/b?x=1", validUris, true)
+	if matchedUri != "https://example.com/app#/page" {
+		t.Fatalf("expected the fragment to be kept, got %q", matchedUri)
+	}
 }
 
 func expectRedirectUriMatch(t *testing.T, uri string, validUris []string, shouldMatch bool) {
